@@ -1,0 +1,62 @@
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  buildConfiguration: 'Release'
+  imageName: 'supplychain-demo'
+
+stages:
+  - stage: Build
+    displayName: Build and Test
+    jobs:
+      - job: Build
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              packageType: 'sdk'
+              version: '7.0.x'
+
+          - script: |
+              dotnet restore src/SupplyChainDemo.Api/SupplyChainDemo.Api.csproj
+            displayName: 'dotnet restore'
+
+          - script: |
+              dotnet build --no-restore -c $(buildConfiguration)
+            displayName: 'dotnet build'
+
+          - script: |
+              dotnet test tests/SupplyChainDemo.Tests -c $(buildConfiguration) --no-build --verbosity normal
+            displayName: 'dotnet test'
+
+          - task: Docker@2
+            displayName: Build Docker image
+            inputs:
+              containerRegistry: '$(dockerRegistryServiceConnection)' # configure in pipeline variables / service connection
+              repository: '$(imageName)'
+              command: 'buildAndPush'
+              Dockerfile: 'Dockerfile'
+              tags: |
+                $(Build.BuildId)
+
+  - stage: Deploy
+    displayName: Deploy to Azure Web App for Containers
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployWeb
+        environment: 'dev'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureWebAppContainer@1
+                  inputs:
+                    azureSubscription: '$(azureServiceConnection)'
+                    appName: '$(webAppName)'
+                    imageName: '$(dockerRegistry)/$(imageName):$(Build.BuildId)'
